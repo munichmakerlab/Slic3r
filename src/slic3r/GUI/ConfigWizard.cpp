@@ -887,6 +887,7 @@ void ConfigWizard::priv::load_pages(bool custom_setup)
     index->add_page(page_fff);
     index->add_page(page_msla);
     index->add_page(page_custom);
+    index->add_page(page_vendors);
 
     if (custom_setup) {
         index->add_page(page_firmware);
