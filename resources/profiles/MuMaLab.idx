@@ -1,0 +1,10 @@
+min_slic3r_version = 1.42.0-alpha6
+0.1.8 no heatbed on ulti pla
+0.1.7 Ultimaker added
+0.1.6 static ip for vertex delta
+0.1.5 cleaned up filament list
+0.1.4 faster speeds for vertex fine
+0.1.3 removed api key for vertex delta
+0.1.2 zonestar print profile is exclusive to zonestar printer now
+0.1.1 using variants feature
+0.1.0 initial version
