@@ -1,0 +1,10 @@
+Package: slic3r-ME
+Version: 1.0-1
+Section: base
+Priority: optional
+Architecture: all
+Depends: libwxgtk3.0-dev, libcurl4, libboost-log1.65.1, libtbb2
+Maintainer: Adrian Menzel <menzeladrian@googlemail.com>
+Description: Slic3r but for the MuMaLab
+ This version of Slic3r PE includes the files needed
+ for using the 3d printers in the Munich Maker Lab
