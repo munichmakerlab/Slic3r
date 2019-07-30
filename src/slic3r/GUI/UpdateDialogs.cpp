@@ -25,7 +25,7 @@ namespace Slic3r {
 namespace GUI {
 
 
-static const char* URL_CHANGELOG = "http://files.prusa3d.com/file/?type=slicerstable&lng=%1%";
+static const char* URL_CHANGELOG = "http://files.prusa3d.com/?latest=slicer-stable&lng=%1%";
 static const char* URL_DOWNLOAD = "https://www.prusa3d.com/downloads&lng=%1%";
 static const char* URL_DEV = "https://github.com/prusa3d/PrusaSlicer/releases/tag/version_%1%";
 
@@ -39,8 +39,7 @@ MsgUpdateSlic3r::MsgUpdateSlic3r(const Semver &ver_current, const Semver &ver_on
 	ver_current(ver_current),
 	ver_online(ver_online)
 {
-	const auto version = Semver::parse(SLIC3R_VERSION);
-	const bool dev_version = version->prerelease() != nullptr || boost::algorithm::ends_with(SLIC3R_BUILD_ID, "UNKNOWN");
+	const bool dev_version = ver_online.prerelease() != nullptr;
 
 	auto *versions = new wxFlexGridSizer(2, 0, VERT_SPACING);
 	versions->Add(new wxStaticText(this, wxID_ANY, _(L("Current version:"))));
@@ -56,7 +55,7 @@ MsgUpdateSlic3r::MsgUpdateSlic3r(const Semver &ver_current, const Semver &ver_on
 		auto *link = new wxHyperlinkCtrl(this, wxID_ANY, _(L("Changelog && Download")), url_wx);
 		content_sizer->Add(link);
 	} else {
-		const auto lang_code = wxGetApp().current_language_code().ToStdString();
+		const auto lang_code = wxGetApp().current_language_code_safe().ToStdString();
 
 		const std::string url_log = (boost::format(URL_CHANGELOG) % lang_code).str();
 		const wxString url_log_wx = from_u8(url_log);
@@ -101,7 +100,7 @@ MsgUpdateConfig::MsgUpdateConfig(const std::vector<Update> &updates) :
 	content_sizer->Add(text);
 	content_sizer->AddSpacer(VERT_SPACING);
 
-	const auto lang_code = wxGetApp().current_language_code().ToStdString();
+	const auto lang_code = wxGetApp().current_language_code_safe().ToStdString();
 
 	auto *versions = new wxBoxSizer(wxVERTICAL);
 	for (const auto &update : updates) {
@@ -119,7 +118,7 @@ MsgUpdateConfig::MsgUpdateConfig(const std::vector<Update> &updates) :
 
 		versions->Add(flex);
 
-		if (! update.changelog_url.empty()) {
+		if (! update.changelog_url.empty() && update.version.prerelease() == nullptr) {
 			auto *line = new wxBoxSizer(wxHORIZONTAL);
 			auto changelog_url = (boost::format(update.changelog_url) % lang_code).str();
 			line->AddSpacer(3*VERT_SPACING);

@@ -20,6 +20,9 @@ namespace Slic3r {
 	enum class ModelVolumeType : int;
 };
 
+typedef double                          coordf_t;
+typedef std::pair<coordf_t, coordf_t>   t_layer_height_range;
+
 #ifdef __WXMSW__
 void                msw_rescale_menu(wxMenu* menu);
 #else /* __WXMSW__ */
@@ -159,12 +162,14 @@ DECLARE_VARIANT_OBJECT(DataViewBitmapText)
 // ----------------------------------------------------------------------------
 
 enum ItemType {
-    itUndef = 0,
-    itObject = 1,
-    itVolume = 2,
-    itInstanceRoot = 4,
-    itInstance = 8,
-    itSettings = 16
+    itUndef         = 0,
+    itObject        = 1,
+    itVolume        = 2,
+    itInstanceRoot  = 4,
+    itInstance      = 8,
+    itSettings      = 16,
+    itLayerRoot     = 32,
+    itLayer         = 64,
 };
 
 class ObjectDataViewModelNode;
@@ -177,6 +182,7 @@ class ObjectDataViewModelNode
     wxBitmap                        m_empty_bmp;
     size_t                          m_volumes_cnt = 0;
     std::vector< std::string >      m_opt_categories;
+    t_layer_height_range            m_layer_range = { 0.0f, 0.0f };
 
     wxString				        m_name;
     wxBitmap&                       m_bmp = m_empty_bmp;
@@ -228,6 +234,11 @@ public:
 
         set_action_icon();
     }
+
+	ObjectDataViewModelNode(ObjectDataViewModelNode* parent,
+							const t_layer_height_range& layer_range,
+                            const int idx = -1,
+                            const wxString& extruder = wxEmptyString );
 
     ObjectDataViewModelNode(ObjectDataViewModelNode* parent, const ItemType type);
 
@@ -290,27 +301,7 @@ public:
 		return m_children.GetCount();
 	}
 
-	bool SetValue(const wxVariant &variant, unsigned int col)
-	{
-		switch (col)
-		{
-		case 0:{
-            DataViewBitmapText data;
-			data << variant;
-            m_bmp = data.GetBitmap();
-			m_name = data.GetText();
-			return true;}
-		case 1:
-			m_extruder = variant.GetString();
-			return true;
-		case 2:
-			m_action_icon << variant;
-			return true;
-		default:
-			printf("MyObjectTreeModel::SetValue: wrong column");
-		}
-		return false;
-	}
+	bool            SetValue(const wxVariant &variant, unsigned int col);
 
 	void            SetBitmap(const wxBitmap &icon) { m_bmp = icon; }
     const wxBitmap& GetBitmap() const               { return m_bmp; }
@@ -318,6 +309,7 @@ public:
     ItemType        GetType() const                 { return m_type; }
 	void			SetIdx(const int& idx);
 	int             GetIdx() const                  { return m_idx; }
+	t_layer_height_range    GetLayerRange() const   { return m_layer_range; }
 
 	// use this function only for childrens
 	void AssignAllVal(ObjectDataViewModelNode& from_node)
@@ -331,9 +323,9 @@ public:
 	}
 
 	bool SwapChildrens(int frst_id, int scnd_id) {
-		if (GetChildCount() < 2 || 
-			frst_id < 0 || frst_id >= GetChildCount() || 
-			scnd_id < 0 || scnd_id >= GetChildCount())
+		if (GetChildCount() < 2 ||
+			frst_id < 0 || (size_t)frst_id >= GetChildCount() ||
+			scnd_id < 0 || (size_t)scnd_id >= GetChildCount())
 			return false;
 
 		ObjectDataViewModelNode new_scnd = *GetNthChild(frst_id);
@@ -348,7 +340,7 @@ public:
 	}
 
 	// Set action icons for node
-    void set_action_icon();
+    void        set_action_icon();
 
     void        update_settings_digest_bitmaps();
 	bool        update_settings_digest(const std::vector<std::string>& categories);
@@ -388,6 +380,11 @@ public:
                                     const bool create_frst_child = true);
     wxDataViewItem AddSettingsChild(const wxDataViewItem &parent_item);
     wxDataViewItem AddInstanceChild(const wxDataViewItem &parent_item, size_t num);
+    wxDataViewItem AddLayersRoot(const wxDataViewItem &parent_item);
+    wxDataViewItem AddLayersChild(  const wxDataViewItem &parent_item, 
+                                    const t_layer_height_range& layer_range,
+                                    const int extruder = 0, 
+                                    const int index = -1);
 	wxDataViewItem Delete(const wxDataViewItem &item);
 	wxDataViewItem DeleteLastInstance(const wxDataViewItem &parent_item, size_t num);
 	void DeleteAll();
@@ -395,13 +392,18 @@ public:
     void DeleteVolumeChildren(wxDataViewItem& parent);
     void DeleteSettings(const wxDataViewItem& parent);
 	wxDataViewItem GetItemById(int obj_idx);
+    wxDataViewItem GetItemById(const int obj_idx, const int sub_obj_idx, const ItemType parent_type);
 	wxDataViewItem GetItemByVolumeId(int obj_idx, int volume_idx);
 	wxDataViewItem GetItemByInstanceId(int obj_idx, int inst_idx);
+    wxDataViewItem GetItemByLayerId(int obj_idx, int layer_idx);
+    wxDataViewItem GetItemByLayerRange(const int obj_idx, const t_layer_height_range& layer_range);
+    int  GetItemIdByLayerRange(const int obj_idx, const t_layer_height_range& layer_range);
 	int  GetIdByItem(const wxDataViewItem& item) const;
     int  GetIdByItemAndType(const wxDataViewItem& item, const ItemType type) const;
     int  GetObjectIdByItem(const wxDataViewItem& item) const;
     int  GetVolumeIdByItem(const wxDataViewItem& item) const;
     int  GetInstanceIdByItem(const wxDataViewItem& item) const;
+    int  GetLayerIdByItem(const wxDataViewItem& item) const;
     void GetItemInfo(const wxDataViewItem& item, ItemType& type, int& obj_idx, int& idx);
     int  GetRowByItem(const wxDataViewItem& item) const;
     bool IsEmpty() { return m_objects.empty(); }
@@ -450,6 +452,7 @@ public:
                                     ItemType type) const;
     wxDataViewItem  GetSettingsItem(const wxDataViewItem &item) const;
     wxDataViewItem  GetInstanceRootItem(const wxDataViewItem &item) const;
+    wxDataViewItem  GetLayerRootItem(const wxDataViewItem &item) const;
     bool    IsSettingsItem(const wxDataViewItem &item) const;
     void    UpdateSettingsDigest(   const wxDataViewItem &item, 
                                     const std::vector<std::string>& categories);
@@ -465,6 +468,7 @@ public:
     wxBitmap    GetVolumeIcon(const Slic3r::ModelVolumeType vol_type, 
                               const bool is_marked = false);
     void        DeleteWarningIcon(const wxDataViewItem& item, const bool unmark_object = false);
+    t_layer_height_range    GetLayerRangeByItem(const wxDataViewItem& item) const;
 };
 
 // ----------------------------------------------------------------------------
@@ -727,6 +731,7 @@ public:
     void OnWheel(wxMouseEvent& event);
     void OnKeyDown(wxKeyEvent &event);
     void OnKeyUp(wxKeyEvent &event);
+    void OnChar(wxKeyEvent &event);
     void OnRightDown(wxMouseEvent& event);
     void OnRightUp(wxMouseEvent& event);
 
@@ -741,6 +746,7 @@ protected:
     void    draw_ticks(wxDC& dc);
     void    draw_colored_band(wxDC& dc);
     void    draw_one_layer_icon(wxDC& dc);
+    void    draw_revert_icon(wxDC& dc);
     void    draw_thumb_item(wxDC& dc, const wxPoint& pos, const SelectedSlider& selection);
     void    draw_info_line_with_icon(wxDC& dc, const wxPoint& pos, SelectedSlider selection);
     void    draw_thumb_text(wxDC& dc, const wxPoint& pos, const SelectedSlider& selection) const;
@@ -782,6 +788,7 @@ private:
     ScalableBitmap    m_bmp_one_layer_lock_off;
     ScalableBitmap    m_bmp_one_layer_unlock_on;
     ScalableBitmap    m_bmp_one_layer_unlock_off;
+    ScalableBitmap    m_bmp_revert;
     SelectedSlider  m_selection;
     bool        m_is_left_down = false;
     bool        m_is_right_down = false;
@@ -795,9 +802,11 @@ private:
     wxRect      m_rect_higher_thumb;
     wxRect      m_rect_tick_action;
     wxRect      m_rect_one_layer_icon;
+    wxRect      m_rect_revert_icon;
     wxSize      m_thumb_size;
     int         m_tick_icon_dim;
     int         m_lock_icon_dim;
+    int         m_revert_icon_dim;
     long        m_style;
     float       m_label_koef = 1.0;
 
@@ -837,8 +846,12 @@ public:
     void    OnEnterBtn(wxMouseEvent& event) { enter_button(true); event.Skip(); }
     void    OnLeaveBtn(wxMouseEvent& event) { enter_button(false); event.Skip(); }
 
-    bool    IsLocked() const { return m_is_pushed; }
+    bool    IsLocked() const                { return m_is_pushed; }
     void    SetLock(bool lock);
+
+    // create its own Enable/Disable functions to not really disabled button because of tooltip enabling
+    void    enable()                        { m_disabled = false; }
+    void    disable()                       { m_disabled = true;  }
 
     void    msw_rescale();
 
@@ -847,6 +860,7 @@ protected:
 
 private:
     bool        m_is_pushed = false;
+    bool        m_disabled = false;
 
     ScalableBitmap    m_bmp_lock_on;
     ScalableBitmap    m_bmp_lock_off;
@@ -932,7 +946,7 @@ private:
 class ModeSizer : public wxFlexGridSizer
 {
 public:
-    ModeSizer( wxWindow *parent, int hgap = 10);
+    ModeSizer( wxWindow *parent, int hgap = 0);
     ~ModeSizer() {}
 
     void SetMode(const /*ConfigOptionMode*/int mode);

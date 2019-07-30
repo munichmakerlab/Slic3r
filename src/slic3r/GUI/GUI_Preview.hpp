@@ -110,6 +110,8 @@ public:
     wxGLCanvas* get_wxglcanvas() { return m_canvas_widget; }
     GLCanvas3D* get_canvas3d() { return m_canvas; }
 
+    void set_as_dirty();
+
     void set_number_extruders(unsigned int number_extruders);
     void set_canvas_as_dirty();
     void set_enabled(bool enabled);
@@ -122,6 +124,10 @@ public:
     void refresh_print();
 
     void msw_rescale();
+    void move_double_slider(wxKeyEvent& evt);
+    void edit_double_slider(wxKeyEvent& evt);
+
+    void update_view_type();
 
 private:
     bool init(wxWindow* parent, Bed3D& bed, Camera& camera, GLToolbar& view_toolbar, Model* model);

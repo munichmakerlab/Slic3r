@@ -113,11 +113,19 @@ wxString Field::get_tooltip_text(const wxString& default_string)
 	wxString tooltip_text("");
 	wxString tooltip = _(m_opt.tooltip);
     edit_tooltip(tooltip);
+
+    std::string opt_id = m_opt_id;
+    auto hash_pos = opt_id.find("#");
+    if (hash_pos != std::string::npos) {
+        opt_id.replace(hash_pos, 1,"[");
+        opt_id += "]";
+    }
+
 	if (tooltip.length() > 0)
         tooltip_text = tooltip + "\n" + _(L("default value")) + "\t: " +
-        (boost::iends_with(m_opt_id, "_gcode") ? "\n" : "") + default_string +
-        (boost::iends_with(m_opt_id, "_gcode") ? "" : "\n") + 
-        _(L("parameter name")) + "\t: " + m_opt_id;
+        (boost::iends_with(opt_id, "_gcode") ? "\n" : "") + default_string +
+        (boost::iends_with(opt_id, "_gcode") ? "" : "\n") + 
+        _(L("parameter name")) + "\t: " + opt_id;
 
 	return tooltip_text;
 }
@@ -185,17 +193,18 @@ void Field::get_value_by_opt_type(wxString& str)
                 show_error(m_parent, _(L("Invalid numeric input.")));
                 set_value(double_to_string(val), true);
             }
-            else if (m_opt.sidetext.rfind("mm/s") != std::string::npos && val > m_opt.max ||
-                     m_opt.sidetext.rfind("mm ") != std::string::npos && val > 1)
+            else if ((m_opt.sidetext.rfind("mm/s") != std::string::npos && val > m_opt.max ||
+                     m_opt.sidetext.rfind("mm ") != std::string::npos && val > 1) && 
+                     (m_value.empty() || std::string(str.ToUTF8().data()) != boost::any_cast<std::string>(m_value)))
             {
-                std::string sidetext = m_opt.sidetext.rfind("mm/s") != std::string::npos ? "mm/s" : "mm";
-                const int nVal = int(val);
-                wxString msg_text = wxString::Format(_(L("Do you mean %d%% instead of %d %s?\n"
-                    "Select YES if you want to change this value to %d%%, \n"
-                    "or NO if you are sure that %d %s is a correct value.")), nVal, nVal, sidetext, nVal, nVal, sidetext);
+                const std::string sidetext = m_opt.sidetext.rfind("mm/s") != std::string::npos ? "mm/s" : "mm";
+                const wxString stVal = double_to_string(val, 2);
+                const wxString msg_text = wxString::Format(_(L("Do you mean %s%% instead of %s %s?\n"
+                    "Select YES if you want to change this value to %s%%, \n"
+                    "or NO if you are sure that %s %s is a correct value.")), stVal, stVal, sidetext, stVal, stVal, sidetext);
                 auto dialog = new wxMessageDialog(m_parent, msg_text, _(L("Parameter validation")), wxICON_WARNING | wxYES | wxNO);
                 if (dialog->ShowModal() == wxID_YES) {
-                    set_value(wxString::Format("%s%%", str), true);
+                    set_value(wxString::Format("%s%%", stVal), false/*true*/);
                     str += "%%";
                 }
             }
@@ -434,7 +443,6 @@ void CheckBox::msw_rescale()
     field->SetMinSize(wxSize(-1, int(1.5f*field->GetFont().GetPixelSize().y +0.5f)));
 }
 
-int undef_spin_val = -9999;		//! Probably, It's not necessary
 
 void SpinCtrl::BUILD() {
 	auto size = wxSize(wxDefaultSize);
@@ -472,12 +480,14 @@ void SpinCtrl::BUILD() {
 	temp->SetFont(Slic3r::GUI::wxGetApp().normal_font());
 	temp->SetBackgroundStyle(wxBG_STYLE_PAINT);
 
-#ifndef __WXOSX__
-    // #ys_FIXME_KILL_FOCUS 
-    // wxEVT_KILL_FOCUS doesn't handled on OSX now (wxWidgets 3.1.1)
-    // So, we will update values on KILL_FOCUS & SPINCTRL events under MSW and GTK
-    // and on TEXT event under OSX
+// XXX: On OS X the wxSpinCtrl widget is made up of two subwidgets, unfortunatelly
+// the kill focus event is not propagated to the encompassing widget,
+// so we need to bind it on the inner text widget instead. (Ugh.)
+#ifdef __WXOSX__
+	temp->GetText()->Bind(wxEVT_KILL_FOCUS, ([this](wxEvent& e)
+#else
 	temp->Bind(wxEVT_KILL_FOCUS, ([this](wxEvent& e)
+#endif
 	{
         e.Skip();
         if (bEnterPressed) {
@@ -486,7 +496,7 @@ void SpinCtrl::BUILD() {
         }
 
         propagate_value();
-	}), temp->GetId());
+	}));
 
     temp->Bind(wxEVT_SPINCTRL, ([this](wxCommandEvent e) {  propagate_value();  }), temp->GetId()); 
     
@@ -496,7 +506,6 @@ void SpinCtrl::BUILD() {
         propagate_value();
         bEnterPressed = true;
     }), temp->GetId());
-#endif
 
 	temp->Bind(wxEVT_TEXT, ([this](wxCommandEvent e)
 	{
@@ -504,24 +513,17 @@ void SpinCtrl::BUILD() {
 // 		# when it was changed from the text control, so the on_change callback
 // 		# gets the old one, and on_kill_focus resets the control to the old value.
 // 		# As a workaround, we get the new value from $event->GetString and store
-// 		# here temporarily so that we can return it from $self->get_value
-		std::string value = e.GetString().utf8_str().data();
-        if (is_matched(value, "^\\-?\\d+$")) {
-            try {
-                tmp_value = std::stoi(value);
-            }
-            catch (const std::exception & /* e */) {
-                tmp_value = -9999;
-            }
-        }
-        else tmp_value = -9999;
-#ifdef __WXOSX__
-        propagate_value();
+// 		# here temporarily so that we can return it from get_value()
 
+		long value;
+		const bool parsed = e.GetString().ToLong(&value);
+		tmp_value = parsed && value >= INT_MIN && value <= INT_MAX ? (int)value : UNDEF_VALUE;
+
+#ifdef __WXOSX__
         // Forcibly set the input value for SpinControl, since the value 
-	    // inserted from the clipboard is not updated under OSX
-        if (tmp_value > -9999) {
-            wxSpinCtrl* spin = dynamic_cast<wxSpinCtrl*>(window);
+	    // inserted from the keyboard or clipboard is not updated under OSX
+        if (tmp_value != UNDEF_VALUE) {
+            wxSpinCtrl* spin = static_cast<wxSpinCtrl*>(window);
             spin->SetValue(tmp_value);
 
             // But in SetValue() is executed m_text_ctrl->SelectAll(), so
@@ -539,10 +541,11 @@ void SpinCtrl::BUILD() {
 
 void SpinCtrl::propagate_value()
 {
-    if (tmp_value == -9999)
+    if (tmp_value == UNDEF_VALUE) {
         on_kill_focus();
-    else if (boost::any_cast<int>(m_value) != tmp_value)
+	} else {
         on_change_field();
+    }
 }
 
 void SpinCtrl::msw_rescale()
@@ -583,12 +586,15 @@ void Choice::BUILD() {
 	// recast as a wxWindow to fit the calling convention
 	window = dynamic_cast<wxWindow*>(temp);
 
-	if (m_opt.enum_labels.empty() && m_opt.enum_values.empty()) {
-	}
-	else{
-		for (auto el : m_opt.enum_labels.empty() ? m_opt.enum_values : m_opt.enum_labels) {
-			const wxString& str = _(el);//m_opt_id == "support" ? _(el) : el;
-			temp->Append(str);
+	if (! m_opt.enum_labels.empty() || ! m_opt.enum_values.empty()) {
+		if (m_opt.enum_labels.empty()) {
+			// Append non-localized enum_values
+			for (auto el : m_opt.enum_values)
+				temp->Append(el);
+		} else {
+			// Append localized enum_labels
+			for (auto el : m_opt.enum_labels)
+				temp->Append(_(el));
 		}
 		set_selection();
 	}
@@ -856,7 +862,7 @@ boost::any& Choice::get_value()
     else if (m_opt.gui_type == "f_enum_open") {
         const int ret_enum = field->GetSelection();
         if (ret_enum < 0 || m_opt.enum_values.empty() || m_opt.type == coStrings ||
-            ret_str != m_opt.enum_values[ret_enum] && ret_str != m_opt.enum_labels[ret_enum] )
+            (ret_str != m_opt.enum_values[ret_enum] && ret_str != _(m_opt.enum_labels[ret_enum])))
 			// modifies ret_string!
             get_value_by_opt_type(ret_str);
         else 
@@ -892,15 +898,16 @@ void Choice::msw_rescale()
     // Set rescaled size
     field->SetSize(size);
 
-    size_t idx, counter = idx = 0;
-    if (m_opt.enum_labels.empty() && m_opt.enum_values.empty()) {}
-    else{
-        for (auto el : m_opt.enum_labels.empty() ? m_opt.enum_values : m_opt.enum_labels) {
-            const wxString& str = _(el);
-            field->Append(str);
-            if (el.compare(selection) == 0)
+    size_t idx = 0;
+    if (! m_opt.enum_labels.empty() || ! m_opt.enum_values.empty()) {
+    	size_t counter = 0;
+    	bool   labels = ! m_opt.enum_labels.empty();
+        for (const std::string &el : labels ? m_opt.enum_labels : m_opt.enum_values) {
+        	wxString text = labels ? _(el) : wxString::FromUTF8(el.c_str());
+            field->Append(text);
+            if (text == selection)
                 idx = counter;
-            ++counter;
+            ++ counter;
         }
     }
 

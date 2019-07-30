@@ -35,6 +35,7 @@ namespace GUI {
 MainFrame::MainFrame() :
 DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_STYLE, "mainframe"),
     m_printhost_queue_dlg(new PrintHostQueueDialog(this))
+    , m_recent_projects(9)
 {
     // Fonts were created by the DPIFrame constructor for the monitor, on which the window opened.
     wxGetApp().update_fonts(this);
@@ -54,7 +55,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_S
 #endif // _WIN32
 
 	// initialize status bar
-	m_statusbar = new ProgressStatusBar(this);
+	m_statusbar.reset(new ProgressStatusBar(this));
 	m_statusbar->embed(this);
     m_statusbar->set_status_text(_(L("Version")) + " " +
 		SLIC3R_VERSION +
@@ -103,6 +104,8 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_S
             event.Veto();
             return;
         }
+        
+        if(m_plater) m_plater->stop_jobs();
 
         // Weird things happen as the Paint messages are floating around the windows being destructed.
         // Avoid the Paint messages by hiding the main window.
@@ -138,12 +141,16 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_S
     update_ui_from_settings();    // FIXME (?)
 }
 
+MainFrame::~MainFrame() = default;
+
 void MainFrame::update_title()
 {
     wxString title = wxEmptyString;
     if (m_plater != nullptr)
     {
-        wxString project = from_path(into_path(m_plater->get_project_filename()).stem());
+        // m_plater->get_project_filename() produces file name including path, but excluding extension.
+        // Don't try to remove the extension, it would remove part of the file name after the last dot!
+        wxString project = from_path(into_path(m_plater->get_project_filename()).filename());
         if (!project.empty())
             title += (project + " - ");
     }
@@ -377,10 +384,48 @@ void MainFrame::init_menubar()
         append_menu_item(fileMenu, wxID_ANY, _(L("&Open Project")) + dots + "\tCtrl+O", _(L("Open a project file")),
             [this](wxCommandEvent&) { if (m_plater) m_plater->load_project(); }, menu_icon("open"), nullptr,
             [this](){return m_plater != nullptr; }, this);
+
+        wxMenu* recent_projects_menu = new wxMenu();
+        wxMenuItem* recent_projects_submenu = append_submenu(fileMenu, recent_projects_menu, wxID_ANY, _(L("Recent projects")), "");
+        m_recent_projects.UseMenu(recent_projects_menu);
+        Bind(wxEVT_MENU, [this](wxCommandEvent& evt) {
+            size_t file_id = evt.GetId() - wxID_FILE1;
+            wxString filename = m_recent_projects.GetHistoryFile(file_id);
+            if (wxFileExists(filename))
+                m_plater->load_project(filename);
+            else
+            {
+                wxMessageDialog msg(this, _(L("The selected project is no more available")), _(L("Error")));
+                msg.ShowModal();
+
+                m_recent_projects.RemoveFileFromHistory(file_id);
+                std::vector<std::string> recent_projects;
+                size_t count = m_recent_projects.GetCount();
+                for (size_t i = 0; i < count; ++i)
+                {
+                    recent_projects.push_back(into_u8(m_recent_projects.GetHistoryFile(i)));
+                }
+                wxGetApp().app_config->set_recent_projects(recent_projects);
+                wxGetApp().app_config->save();
+            }
+            }, wxID_FILE1, wxID_FILE9);
+
+        std::vector<std::string> recent_projects = wxGetApp().app_config->get_recent_projects();
+        for (const std::string& project : recent_projects)
+        {
+            m_recent_projects.AddFileToHistory(from_u8(project));
+        }
+
+        Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent& evt) { evt.Enable(m_recent_projects.GetCount() > 0); }, recent_projects_submenu->GetId());
+
         append_menu_item(fileMenu, wxID_ANY, _(L("&Save Project")) + "\tCtrl+S", _(L("Save current project file")),
             [this](wxCommandEvent&) { if (m_plater) m_plater->export_3mf(into_path(m_plater->get_project_filename(".3mf"))); }, menu_icon("save"), nullptr,
             [this](){return m_plater != nullptr && can_save(); }, this);
+#ifdef __APPLE__
+        append_menu_item(fileMenu, wxID_ANY, _(L("Save Project &as")) + dots + "\tCtrl+Shift+S", _(L("Save current project file as")),
+#else
         append_menu_item(fileMenu, wxID_ANY, _(L("Save Project &as")) + dots + "\tCtrl+Alt+S", _(L("Save current project file as")),
+#endif // __APPLE__
             [this](wxCommandEvent&) { if (m_plater) m_plater->export_3mf(); }, menu_icon("save"), nullptr,
             [this](){return m_plater != nullptr && can_save(); }, this);
 
@@ -481,11 +526,9 @@ void MainFrame::init_menubar()
         append_menu_item(editMenu, wxID_ANY, _(L("&Select all")) + sep + GUI::shortkey_ctrl_prefix() + sep_space + "A",
             _(L("Selects all objects")), [this](wxCommandEvent&) { if (m_plater != nullptr) m_plater->select_all(); },
             "", nullptr, [this](){return can_select(); }, this);
-#if !DISABLE_DESELECT_ALL_MENU_ITEM
-        append_menu_item(editMenu, wxID_ANY, _(L("D&eselect all")) + sep + GUI::shortkey_ctrl_prefix() + sep + "Esc",
+        append_menu_item(editMenu, wxID_ANY, _(L("D&eselect all")) + sep + "Esc",
             _(L("Deselects all objects")), [this](wxCommandEvent&) { if (m_plater != nullptr) m_plater->deselect_all(); },
             "", nullptr, [this](){return can_deselect(); }, this);
-#endif // !DISABLE_DESELECT_ALL_MENU_ITEM
         editMenu->AppendSeparator();
         append_menu_item(editMenu, wxID_ANY, _(L("&Delete selected")) + sep + hotkey_delete,
             _(L("Deletes the current selection")),[this](wxCommandEvent&) { m_plater->remove_selected(); },
@@ -495,12 +538,20 @@ void MainFrame::init_menubar()
             menu_icon("delete_all_menu"), nullptr, [this](){return can_delete_all(); }, this);
 
         editMenu->AppendSeparator();
+        append_menu_item(editMenu, wxID_ANY, _(L("&Undo")) + sep + GUI::shortkey_ctrl_prefix() + sep_space + "Z",
+            _(L("Undo")), [this](wxCommandEvent&) { m_plater->undo(); },
+            "undo", nullptr, [this](){return m_plater->can_undo(); }, this);
+        append_menu_item(editMenu, wxID_ANY, _(L("&Redo")) + sep + GUI::shortkey_ctrl_prefix() + sep_space + "Y",
+            _(L("Redo")), [this](wxCommandEvent&) { m_plater->redo(); },
+            "redo", nullptr, [this](){return m_plater->can_redo(); }, this);
+
+        editMenu->AppendSeparator();
         append_menu_item(editMenu, wxID_ANY, _(L("&Copy")) + sep + GUI::shortkey_ctrl_prefix() + sep_space + "C",
             _(L("Copy selection to clipboard")), [this](wxCommandEvent&) { m_plater->copy_selection_to_clipboard(); },
-            menu_icon("copy_menu"), nullptr, [this](){return m_plater->can_copy(); }, this);
+            menu_icon("copy_menu"), nullptr, [this](){return m_plater->can_copy_to_clipboard(); }, this);
         append_menu_item(editMenu, wxID_ANY, _(L("&Paste")) + sep + GUI::shortkey_ctrl_prefix() + sep_space + "V",
             _(L("Paste clipboard")), [this](wxCommandEvent&) { m_plater->paste_from_clipboard(); },
-            menu_icon("paste_menu"), nullptr, [this](){return m_plater->can_paste(); }, this);
+            menu_icon("paste_menu"), nullptr, [this](){return m_plater->can_paste_from_clipboard(); }, this);
     }
 
     // Window menu
@@ -972,7 +1023,8 @@ void MainFrame::load_config(const DynamicPrintConfig& config)
 				if (! boost::algorithm::ends_with(opt_key, "_settings_id"))
 					tab->get_config()->option(opt_key)->set(config.option(opt_key));
         }
-	wxGetApp().load_current_presets();
+    
+    wxGetApp().load_current_presets();
 #endif
 }
 
@@ -1037,6 +1089,23 @@ void MainFrame::on_config_changed(DynamicPrintConfig* config) const
         m_plater->on_config_change(*config); // propagate config change events to the plater
 }
 
+void MainFrame::add_to_recent_projects(const wxString& filename)
+{
+    if (wxFileExists(filename))
+    {
+        m_recent_projects.AddFileToHistory(filename);
+        std::vector<std::string> recent_projects;
+        size_t count = m_recent_projects.GetCount();
+        for (size_t i = 0; i < count; ++i)
+        {
+            recent_projects.push_back(into_u8(m_recent_projects.GetHistoryFile(i)));
+        }
+        wxGetApp().app_config->set_recent_projects(recent_projects);
+        wxGetApp().app_config->save();
+    }
+}
+
+//
 // Called after the Preferences dialog is closed and the program settings are saved.
 // Update the UI based on the current preferences.
 void MainFrame::update_ui_from_settings()

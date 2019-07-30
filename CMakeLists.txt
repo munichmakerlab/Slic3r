@@ -32,7 +32,6 @@ option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 option(SLIC3R_MSVC_PDB          "Generate PDB files on MSVC in Release mode" 1)
 option(SLIC3R_PERL_XS           "Compile XS Perl module and enable Perl unit and integration tests" 0)
 option(SLIC3R_ASAN              "Enable ASan on Clang and GCC" 0)
-option(SLIC3R_SYNTAXONLY        "Only perform source code correctness checking, no binary output (UNIX only)" 0)
 
 set(SLIC3R_GTK "2" CACHE STRING "GTK version to use with wxWidgets on Linux")
 
@@ -60,7 +59,7 @@ if (MSVC)
     # /bigobj (Increase Number of Sections in .Obj file)
     # error C3859: virtual memory range for PCH exceeded; please recompile with a command line option of '-Zm90' or greater
     # Generate symbols at every build target, even for the release.
-    add_compile_options(-bigobj -Zm316 /Zi)
+    add_compile_options(-bigobj -Zm520 /Zi)
 endif ()
 
 # Display and check CMAKE_PREFIX_PATH
@@ -89,8 +88,6 @@ enable_testing ()
 # Enable C++11 language standard.
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
 
 if(NOT WIN32)
     # Add DEBUG flags to debug builds.
@@ -149,30 +146,28 @@ endif()
 if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_GNUXX)
     # Adding -fext-numeric-literals to enable GCC extensions on definitions of quad float literals, which are required by Boost.
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fext-numeric-literals" )
-
-    if (SLIC3R_SYNTAXONLY)
-        set(CMAKE_CXX_ARCHIVE_CREATE "true")
-        set(CMAKE_C_ARCHIVE_CREATE "true")
-        set(CMAKE_CXX_ARCHIVE_APPEND "true")
-        set(CMAKE_C_ARCHIVE_APPEND "true")
-        set(CMAKE_RANLIB "true")
-        set(CMAKE_C_LINK_EXECUTABLE "true")
-        set(CMAKE_CXX_LINK_EXECUTABLE "true")
-
-        set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> -fsyntax-only <DEFINES> <INCLUDES> <FLAGS> -c <SOURCE> && touch <OBJECT>")
-        set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> -fsyntax-only <DEFINES> <INCLUDES> <FLAGS> -c <SOURCE> && touch <OBJECT>")
-    endif ()
 endif()
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-    add_compile_options(-Wall)
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall" )
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-reorder" )
 
     # On GCC and Clang, no return from a non-void function is a warning only. Here, we make it an error.
     add_compile_options(-Werror=return-type)
 
-    #removes LOTS of extraneous Eigen warnings
-    add_compile_options(-Wno-ignored-attributes)
+    #removes LOTS of extraneous Eigen warnings (GCC only supports it since 6.1)
+    #if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" OR CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 6.1)
+        # add_compile_options(-Wno-ignored-attributes) # Tamas: Eigen include dirs are marked as SYSTEM
+    #endif()
+
+    #GCC generates loads of -Wunknown-pragmas when compiling igl. The fix is not easy due to a bug in gcc, see
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66943 or
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=53431
+    # We will turn the warning of for GCC for now:
+    if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+        add_compile_options(-Wno-unknown-pragmas)
+    endif()
+
 
     if (SLIC3R_ASAN)
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
@@ -240,15 +235,34 @@ if(NOT WIN32)
     set(MINIMUM_BOOST_VERSION "1.64.0")
 endif()
 find_package(Boost ${MINIMUM_BOOST_VERSION} REQUIRED COMPONENTS system filesystem thread log locale regex)
-if(Boost_FOUND)
-    include_directories(${Boost_INCLUDE_DIRS})
-    if (APPLE)
-        # BOOST_ASIO_DISABLE_KQUEUE : prevents a Boost ASIO bug on OS X: https://svn.boost.org/trac/boost/ticket/5339
-        add_definitions(-DBOOST_ASIO_DISABLE_KQUEUE)
-    endif()
-    if(NOT SLIC3R_STATIC)
-        add_definitions(-DBOOST_LOG_DYN_LINK)
-    endif()
+
+add_library(boost_libs INTERFACE)
+add_library(boost_headeronly INTERFACE)
+
+if (APPLE)
+    # BOOST_ASIO_DISABLE_KQUEUE : prevents a Boost ASIO bug on OS X: https://svn.boost.org/trac/boost/ticket/5339
+    target_compile_definitions(boost_headeronly INTERFACE BOOST_ASIO_DISABLE_KQUEUE)
+endif()
+
+if(NOT SLIC3R_STATIC)
+    target_compile_definitions(boost_headeronly INTERFACE BOOST_LOG_DYN_LINK)
+endif()
+
+if(TARGET Boost::system)
+    message(STATUS "Boost::boost exists")
+    target_link_libraries(boost_headeronly INTERFACE Boost::boost)
+    target_link_libraries(boost_libs INTERFACE 
+        boost_headeronly # includes the custom compile definitions as well
+        Boost::system
+        Boost::filesystem
+        Boost::thread
+        Boost::log
+        Boost::locale
+        Boost::regex
+        )
+else()
+    target_include_directories(boost_headeronly INTERFACE ${Boost_INCLUDE_DIRS})
+    target_link_libraries(boost_libs INTERFACE boost_headeronly ${Boost_LIBRARIES})
 endif()
 
 # Find and configure intel-tbb
@@ -289,13 +303,13 @@ endif()
 
 # Find eigen3 or use bundled version
 if (NOT SLIC3R_STATIC)
-    find_package(Eigen3 3)
+    find_package(Eigen3 3.3)
 endif ()
-if (NOT Eigen3_FOUND)
-    set(Eigen3_FOUND 1)
+if (NOT EIGEN3_FOUND)
+    set(EIGEN3_FOUND 1)
     set(EIGEN3_INCLUDE_DIR ${LIBDIR}/eigen/)
 endif ()
-include_directories(${EIGEN3_INCLUDE_DIR})
+include_directories(BEFORE SYSTEM ${EIGEN3_INCLUDE_DIR})
 
 # Find expat or use bundled version
 # Always use the system libexpat on Linux.
@@ -326,6 +340,10 @@ if (NOT GLEW_FOUND)
     add_definitions(-DGLEW_STATIC)
 endif ()
 include_directories(${GLEW_INCLUDE_DIRS})
+
+# Find the Cereal serialization library
+add_library(cereal INTERFACE)
+target_include_directories(cereal INTERFACE include)
 
 # l10n
 set(L10N_DIR "${SLIC3R_RESOURCES_DIR}/localization")

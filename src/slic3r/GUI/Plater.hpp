@@ -27,12 +27,18 @@ class ModelObject;
 class Print;
 class SLAPrint;
 
+namespace UndoRedo {
+	class Stack;
+	struct Snapshot;	
+};
+
 namespace GUI {
 
 class MainFrame;
 class ConfigOptionsGroup;
 class ObjectManipulation;
 class ObjectSettings;
+class ObjectLayers;
 class ObjectList;
 class GLCanvas3D;
 
@@ -93,6 +99,7 @@ public:
     ObjectManipulation*     obj_manipul();
     ObjectList*             obj_list();
     ObjectSettings*         obj_settings();
+    ObjectLayers*           obj_layers();
     wxScrolledWindow*       scrolled_panel();
     wxPanel*                presets_panel();
 
@@ -136,6 +143,7 @@ public:
 
     void new_project();
     void load_project();
+    void load_project(const wxString& filename);
     void add_model();
     void extract_config_from_project();
 
@@ -144,6 +152,7 @@ public:
     void load_files(const std::vector<std::string>& input_files, bool load_model = true, bool load_config = true);
 
     void update();
+    void stop_jobs();
     void select_view(const std::string& direction);
     void select_view_3D(const std::string& name);
 
@@ -162,6 +171,7 @@ public:
     void decrease_instances(size_t num = 1);
     void set_number_of_copies(/*size_t num*/);
     bool is_selection_empty() const;
+    void scale_selection_to_fit_print_volume();
 
     void cut(size_t obj_idx, size_t instance_idx, coordf_t z, bool keep_upper = true, bool keep_lower = true, bool rotate_lower = false);
 
@@ -173,9 +183,25 @@ public:
     void reslice_SLA_supports(const ModelObject &object);
     void changed_object(int obj_idx);
     void changed_objects(const std::vector<size_t>& object_idxs);
-    void schedule_background_process();
+    void schedule_background_process(bool schedule = true);
+    bool is_background_process_running() const;
+    void suppress_background_process(const bool stop_background_process) ;
     void fix_through_netfabb(const int obj_idx, const int vol_idx = -1);
     void send_gcode();
+
+    void take_snapshot(const std::string &snapshot_name);
+    void take_snapshot(const wxString &snapshot_name);
+    void undo();
+    void redo();
+    void undo_to(int selection);
+    void redo_to(int selection);
+    bool undo_redo_string_getter(const bool is_undo, int idx, const char** out_text);
+    void undo_redo_topmost_string_getter(const bool is_undo, std::string& out_text);
+    // For the memory statistics. 
+    const Slic3r::UndoRedo::Stack& undo_redo_stack_main() const;
+    // Enter / leave the Gizmos specific Undo / Redo stack. To be used by the SLA support point editing gizmo.
+    void enter_gizmos_stack();
+    void leave_gizmos_stack();
 
     void on_extruders_change(int extruders_count);
     void on_config_change(const DynamicPrintConfig &config);
@@ -198,7 +224,6 @@ public:
 
     void copy_selection_to_clipboard();
     void paste_from_clipboard();
-    bool can_paste_from_clipboard() const;
 
     bool can_delete() const;
     bool can_delete_all() const;
@@ -210,16 +235,66 @@ public:
     bool can_split_to_volumes() const;
     bool can_arrange() const;
     bool can_layers_editing() const;
-    bool can_copy() const;
-    bool can_paste() const;
+    bool can_paste_from_clipboard() const;
+    bool can_copy_to_clipboard() const;
+    bool can_undo() const;
+    bool can_redo() const;
 
     void msw_rescale();
+
+    const Camera& get_camera() const;
+
+	// ROII wrapper for suppressing the Undo / Redo snapshot to be taken.
+	class SuppressSnapshots
+	{
+	public:
+		SuppressSnapshots(Plater *plater) : m_plater(plater)
+		{
+			m_plater->suppress_snapshots();
+		}
+		~SuppressSnapshots()
+		{
+			m_plater->allow_snapshots();
+		}
+	private:
+		Plater *m_plater;
+	};
+
+	// ROII wrapper for taking an Undo / Redo snapshot while disabling the snapshot taking by the methods called from inside this snapshot.
+	class TakeSnapshot
+	{
+	public:
+		TakeSnapshot(Plater *plater, const wxString &snapshot_name) : m_plater(plater)
+		{
+			m_plater->take_snapshot(snapshot_name);
+			m_plater->suppress_snapshots();
+		}
+		~TakeSnapshot()
+		{
+			m_plater->allow_snapshots();
+		}
+	private:
+		Plater *m_plater;
+	};
 
 private:
     struct priv;
     std::unique_ptr<priv> p;
+
+    void suppress_snapshots();
+    void allow_snapshots();
+
+    friend class SuppressBackgroundProcessingUpdate;
 };
 
+class SuppressBackgroundProcessingUpdate
+{
+public:
+    SuppressBackgroundProcessingUpdate();
+    ~SuppressBackgroundProcessingUpdate();
+private:
+    bool m_was_running;
+};
 
 }}
 

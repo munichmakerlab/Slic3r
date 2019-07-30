@@ -144,14 +144,19 @@ void KBShortcutsDialog::fill_shortcuts()
     plater_shortcuts.push_back(Shortcut("F",        L("Gizmo Place face on bed")));
     plater_shortcuts.push_back(Shortcut("L",        L("Gizmo SLA support points")));
     plater_shortcuts.push_back(Shortcut("Shift+",   L("Press to activate selection rectangle\nor to snap by 5% in Gizmo scale\nor to snap by 1mm in Gizmo move")));
+    plater_shortcuts.push_back(Shortcut("F",        L("Press to scale selection to fit print volume\nin Gizmo scale")));
     plater_shortcuts.push_back(Shortcut(alt,        L("Press to activate deselection rectangle\nor to scale or rotate selected objects\naround their own center")));
     plater_shortcuts.push_back(Shortcut(ctrl,       L("Press to activate one direction scaling in Gizmo scale")));
+    plater_shortcuts.push_back(Shortcut("K",        L("Change camera type")));
     plater_shortcuts.push_back(Shortcut("B",        L("Zoom to Bed")));
     plater_shortcuts.push_back(Shortcut("Z",        L("Zoom to all objects in scene, if none selected")));
     plater_shortcuts.push_back(Shortcut("Z",        L("Zoom to selected object")));
     plater_shortcuts.push_back(Shortcut("I",        L("Zoom in")));
     plater_shortcuts.push_back(Shortcut("O",        L("Zoom out")));
     plater_shortcuts.push_back(Shortcut("ESC",      L("Unselect gizmo / Clear selection")));
+#if ENABLE_RENDER_PICKING_PASS
+    plater_shortcuts.push_back(Shortcut("T",        L("Toggle picking pass texture rendering on/off")));
+#endif // ENABLE_RENDER_PICKING_PASS
 
     m_full_shortcuts.push_back(std::make_pair(_(L("Plater Shortcuts")), std::make_pair(plater_shortcuts, szRight)));
 

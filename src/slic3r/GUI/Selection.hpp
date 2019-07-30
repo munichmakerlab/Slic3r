@@ -5,9 +5,14 @@
 #include "libslic3r/Geometry.hpp"
 #include "3DScene.hpp"
 
-namespace Slic3r {
-namespace GUI {
+#if ENABLE_RENDER_SELECTION_CENTER
+class GLUquadric;
+typedef class GLUquadric GLUquadricObj;
+#endif // ENABLE_RENDER_SELECTION_CENTER
 
+namespace Slic3r {
+class Shader;
+namespace GUI {
 class TransformationType
 {
 public:
@@ -147,6 +152,8 @@ public:
         void reset() { m_model.clear_objects(); }
         bool is_empty() const { return m_model.objects.empty(); }
 
+        bool is_sla_compliant() const;
+
         ModelObject* add_object() { return m_model.add_object(); }
         ModelObject* get_object(unsigned int id) { return (id < (unsigned int)m_model.objects.size()) ? m_model.objects[id] : nullptr; }
         const ModelObjectPtrs& get_objects() const { return m_model.objects; }
@@ -164,7 +171,7 @@ private:
         Vec3d dragging_center;
         // Map from indices of ModelObject instances in Model::objects
         // to a set of indices of ModelVolume instances in ModelObject::instances
-        // Here the index means a position inside the respective std::vector, not ModelID.
+        // Here the index means a position inside the respective std::vector, not ObjectID.
         ObjectIdxsToInstanceIdxsMap content;
     };
 
@@ -205,7 +212,7 @@ public:
 #endif // ENABLE_RENDER_SELECTION_CENTER
 
     void set_volumes(GLVolumePtrs* volumes);
-    bool init(bool useVBOs);
+    bool init();
 
     bool is_enabled() const { return m_enabled; }
     void set_enabled(bool enable) { m_enabled = enable; }
@@ -228,7 +235,14 @@ public:
     void add_volume(unsigned int object_idx, unsigned int volume_idx, int instance_idx, bool as_single_selection = true);
     void remove_volume(unsigned int object_idx, unsigned int volume_idx);
 
+    void add_volumes(EMode mode, const std::vector<unsigned int>& volume_idxs, bool as_single_selection = true);
+    void remove_volumes(EMode mode, const std::vector<unsigned int>& volume_idxs);
+
     void add_all();
+    void remove_all();
+
+    // To be called after Undo or Redo once the volumes are updated.
+    void set_deserialized(EMode mode, const std::vector<std::pair<size_t, size_t>> &volumes_and_instances);
 
     // Update the selection based on the new instance IDs.
 	void instances_changed(const std::vector<size_t> &instance_ids_selected);
@@ -252,8 +266,16 @@ public:
     bool is_mixed() const { return m_type == Mixed; }
     bool is_from_single_instance() const { return get_instance_idx() != -1; }
     bool is_from_single_object() const;
+    bool is_sla_compliant() const;
 
     bool contains_volume(unsigned int volume_idx) const { return m_list.find(volume_idx) != m_list.end(); }
+    // returns true if the selection contains all the given indices
+    bool contains_all_volumes(const std::vector<unsigned int>& volume_idxs) const;
+    // returns true if the selection contains at least one of the given indices
+    bool contains_any_volume(const std::vector<unsigned int>& volume_idxs) const;
+    // returns true if the selection contains all and only the given indices
+    bool matches(const std::vector<unsigned int>& volume_idxs) const;
+
     bool requires_uniform_scale() const;
 
     // Returns the the object id if the selection is from a single object, otherwise is -1
@@ -282,6 +304,7 @@ public:
     void rotate(const Vec3d& rotation, TransformationType transformation_type);
     void flattening_rotate(const Vec3d& normal);
     void scale(const Vec3d& scale, TransformationType transformation_type);
+    void scale_to_fit_print_volume(const DynamicPrintConfig& config);
     void mirror(Axis axis);
 
     void translate(unsigned int object_idx, const Vec3d& displacement);
@@ -291,9 +314,9 @@ public:
 
     void render(float scale_factor = 1.0) const;
 #if ENABLE_RENDER_SELECTION_CENTER
-    void render_center() const;
+    void render_center(bool gizmo_is_dragging) const;
 #endif // ENABLE_RENDER_SELECTION_CENTER
-    void render_sidebar_hints(const std::string& sidebar_field) const;
+    void render_sidebar_hints(const std::string& sidebar_field, const Shader& shader) const;
 
     bool requires_local_axes() const;
 
@@ -302,13 +325,23 @@ public:
 
     const Clipboard& get_clipboard() const { return m_clipboard; }
 
+    // returns the list of idxs of the volumes contained into the object with the given idx
+    std::vector<unsigned int> get_volume_idxs_from_object(unsigned int object_idx) const;
+    // returns the list of idxs of the volumes contained into the instance with the given idxs
+    std::vector<unsigned int> get_volume_idxs_from_instance(unsigned int object_idx, unsigned int instance_idx) const;
+    // returns the idx of the volume corresponding to the volume with the given idxs
+    std::vector<unsigned int> get_volume_idxs_from_volume(unsigned int object_idx, unsigned int instance_idx, unsigned int volume_idx) const;
+    // returns the list of idxs of the volumes contained in the selection but not in the given list
+    std::vector<unsigned int> get_missing_volume_idxs_from(const std::vector<unsigned int>& volume_idxs) const;
+    // returns the list of idxs of the volumes contained in the given list but not in the selection
+    std::vector<unsigned int> get_unselected_volume_idxs_from(const std::vector<unsigned int>& volume_idxs) const;
+
 private:
     void update_valid();
     void update_type();
     void set_caches();
     void do_add_volume(unsigned int volume_idx);
-    void do_add_instance(unsigned int object_idx, unsigned int instance_idx);
-    void do_add_object(unsigned int object_idx);
+    void do_add_volumes(const std::vector<unsigned int>& volume_idxs);
     void do_remove_volume(unsigned int volume_idx);
     void do_remove_instance(unsigned int object_idx, unsigned int instance_idx);
     void do_remove_object(unsigned int object_idx);
@@ -323,10 +356,13 @@ private:
     void render_sidebar_rotation_hints(const std::string& sidebar_field) const;
     void render_sidebar_scale_hints(const std::string& sidebar_field) const;
     void render_sidebar_size_hints(const std::string& sidebar_field) const;
+    void render_sidebar_layers_hints(const std::string& sidebar_field) const;
     void render_sidebar_position_hint(Axis axis) const;
     void render_sidebar_rotation_hint(Axis axis) const;
     void render_sidebar_scale_hint(Axis axis) const;
     void render_sidebar_size_hint(Axis axis, double length) const;
+
+public:
     enum SyncRotationType {
         // Do not synchronize rotation. Either not rotating at all, or rotating by world Z axis.
         SYNC_ROTATION_NONE = 0,
@@ -337,6 +373,8 @@ private:
     };
     void synchronize_unselected_instances(SyncRotationType sync_rotation_type);
     void synchronize_unselected_volumes();
+
+private:
     void ensure_on_bed();
     bool is_from_fully_selected_instance(unsigned int volume_idx) const;
 

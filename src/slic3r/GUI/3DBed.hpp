@@ -13,6 +13,8 @@ typedef class GLUquadric GLUquadricObj;
 namespace Slic3r {
 namespace GUI {
 
+class GLCanvas3D;
+
 class GeometryBuffer
 {
 #if ENABLE_TEXTURES_FROM_SVG
@@ -42,8 +44,8 @@ public:
     const float* get_vertices_data() const;
     unsigned int get_vertices_data_size() const { return (unsigned int)m_vertices.size() * get_vertex_data_size(); }
     unsigned int get_vertex_data_size() const { return (unsigned int)(5 * sizeof(float)); }
-    unsigned int get_position_offset() const { return 0; }
-    unsigned int get_tex_coords_offset() const { return (unsigned int)(3 * sizeof(float)); }
+    size_t get_position_offset() const { return 0; }
+    size_t get_tex_coords_offset() const { return (size_t)(3 * sizeof(float)); }
     unsigned int get_vertices_count() const { return (unsigned int)m_vertices.size(); }
 #else
     const float* get_vertices() const { return m_vertices.data(); }
@@ -85,12 +87,17 @@ public:
 private:
     EType m_type;
     Pointfs m_shape;
-    BoundingBoxf3 m_bounding_box;
+    mutable BoundingBoxf3 m_bounding_box;
+    mutable BoundingBoxf3 m_extended_bounding_box;
     Polygon m_polygon;
     GeometryBuffer m_triangles;
     GeometryBuffer m_gridlines;
 #if ENABLE_TEXTURES_FROM_SVG
     mutable GLTexture m_texture;
+    // temporary texture shown until the main texture has still no levels compressed
+    mutable GLTexture m_temp_texture;
+    // used to trigger 3D scene update once all compressed textures have been sent to GPU
+    mutable bool m_requires_canvas_update;
     mutable Shader m_shader;
     mutable unsigned int m_vbo_id;
 #else
@@ -117,23 +124,27 @@ public:
     // Return true if the bed shape changed, so the calee will update the UI.
     bool set_shape(const Pointfs& shape);
 
-    const BoundingBoxf3& get_bounding_box() const { return m_bounding_box; }
+    const BoundingBoxf3& get_bounding_box(bool extended) const { return extended ? m_extended_bounding_box : m_bounding_box; }
     bool contains(const Point& point) const;
     Point point_projection(const Point& point) const;
 
-    void render(float theta, bool useVBOs, float scale_factor) const;
+#if ENABLE_TEXTURES_FROM_SVG
+    void render(GLCanvas3D* canvas, float theta, float scale_factor) const;
+#else
+    void render(float theta, float scale_factor) const;
+#endif // ENABLE_TEXTURES_FROM_SVG
     void render_axes() const;
 
 private:
-    void calc_bounding_box();
+    void calc_bounding_boxes() const;
     void calc_triangles(const ExPolygon& poly);
     void calc_gridlines(const ExPolygon& poly, const BoundingBox& bed_bbox);
     EType detect_type(const Pointfs& shape) const;
 #if ENABLE_TEXTURES_FROM_SVG
-    void render_prusa(const std::string& key, bool bottom) const;
+    void render_prusa(GLCanvas3D* canvas, const std::string& key, bool bottom) const;
     void render_prusa_shader(bool transparent) const;
 #else
-    void render_prusa(const std::string &key, float theta, bool useVBOs) const;
+    void render_prusa(const std::string& key, float theta) const;
 #endif // ENABLE_TEXTURES_FROM_SVG
     void render_custom() const;
 #if ENABLE_TEXTURES_FROM_SVG
