@@ -15,7 +15,7 @@ steps:
 - script: |
     mkdir build
     cd build
-    cmake ..
+    cmake -DSLIC3R_WX_STABLE=1 ..
   displayName: CMake Configure
 - script: make
   displayName: Build
